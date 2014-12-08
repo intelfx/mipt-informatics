@@ -34,6 +34,5 @@ void list_sort(struct Node **list)
 	}
     }
 
-    assert(*list == NULL);
     *list = sorted_list;
 }
