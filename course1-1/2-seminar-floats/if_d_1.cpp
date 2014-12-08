@@ -9,7 +9,7 @@ int main()
     double a, b, c;
     std::cin >> a >> b >> c;
 
-    std::vector<double> solutions;
+    std::vector < double > solutions;
     bool is_R = false;
 
     if (a != 0)
@@ -52,7 +52,7 @@ int main()
         }
 
         std::copy (solutions.begin(), solutions.end(),
-                   std::ostream_iterator<double> (std::cout, " "));
+                   std::ostream_iterator < double > (std::cout, " "));
         std::cout << std::endl;
     }
 }
