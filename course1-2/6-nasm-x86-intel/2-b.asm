@@ -16,7 +16,7 @@ pop eax
 xor edx, edx
 
 mov ebx, 65536
-idiv ebx
+div ebx
 
 push edx ; remainder
 push write_fmt
