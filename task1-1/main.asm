@@ -1,4 +1,3 @@
-extern printf
 extern scanf
 
 extern getchar
@@ -17,9 +16,10 @@ section .text
 main:
 
 ; read input radix
+push dword [stdout]
 push greet_in_radix
-call printf
-add esp, 4
+call fputs
+add esp, 8
 
 push in_radix
 push scan_fmt_radix
@@ -27,9 +27,10 @@ call scanf
 add esp, 8
 
 ; read output radix
+push dword [stdout]
 push greet_out_radix
-call printf
-add esp, 4
+call fputs
+add esp, 8
 
 push out_radix
 push scan_fmt_radix
@@ -37,9 +38,10 @@ call scanf
 add esp, 8
 
 ; read conversion type
+push dword [stdout]
 push greet_type
-call printf
-add esp, 4
+call fputs
+add esp, 8
 
 push conversion_type
 push scan_fmt_type
