@@ -59,7 +59,7 @@ cmp byte [conversion_type], 'b'
 je convert_bcd
 
 cmp byte [conversion_type], 'p'
-je convert_bcd_packed
+je convert_bcd ; the same function -- they share a lot of code
 
 cmp byte [conversion_type], 'f'
 je convert_fp
@@ -232,8 +232,115 @@ jmp write_output
 
 convert_bcd:
 
+; fractional part is not allowed in the bcd mode
+cmp dword [in_negative_exponent], 0
+jne error_exit
 
-convert_bcd_packed:
+; load significand
+mov eax, dword [in_significand]
+
+; here we'll use the same idea as in convert_integer.
+;
+; since we generate BCD bytes in reverse order (from least to most significant),
+; we'll write them to our stack frame, getting a big-endian BCD sequence.
+
+push ebp
+mov ebp, esp
+
+xor ecx, ecx
+
+.loop:
+
+test eax, eax
+jz .loop_end
+
+; divide significand by intermediate (BCD) radix, remainder will be the next digit
+xor edx, edx
+div dword [bcd_radix]
+
+; store the character and go for the next one
+; if we're in packed mode, let's alternate between starting a new byte
+; and ORing the character into the most significant tetrade of the existing byte.
+cmp byte [conversion_type], 'p'
+jne .bcd_new_byte ; not packed? let's start a new byte.
+test cl, 1
+jz .bcd_new_byte ; current digit is even? let's start a new byte.
+
+shl dl, 4
+or byte [esp], dl
+jmp .bcd_written
+
+.bcd_new_byte:
+; // sunrise by hand, PUSH r8 does not exist...
+dec esp
+mov byte [esp], dl
+
+.bcd_written:
+inc ecx
+jmp .loop
+.loop_end:
+
+; now output the BCD chain [ESP; EBP) byte-by-byte
+
+; first, calculate amount of zero-padding required to make beautiful output.
+; range representable with N digits in [out_radix] is equal to [out_radix]^N, thus
+; we need to solve [out_radix]^N >= 256 for minimal integer N.
+; The solution is minN = ceil (log_[out_radix] (256))
+;                      = ceil (log2 (256) / log2 ([out_radix]))
+;                      = ceil (8 / log2 ([out_radix])).
+
+; 8...
+push 8
+fild dword [esp]
+
+; ...log2 ([out_radix])...
+fld1
+fild dword [out_radix]
+fyl2x
+
+; ...8 / log2 ([out_radix])...
+fdivp
+
+; ...now ceil()...
+fstcw word [esp]
+and word [esp], ~(11 << 10) ; RC field
+or word [esp], (10b << 10) ; 10b -- rounding towards +infinity
+fldcw word [esp]
+frndint
+
+; ...and finally store the padding.
+fistp dword [esp]
+pop dword [out_padding]
+
+; we'll want to terminate bytes of the BCD sequence with spaces rather than newlines
+mov dword [terminal_char], ' '
+
+.bcd_write_loop:
+
+cmp esp, ebp
+jnb .bcd_write_loop_end
+
+; // sunrise by hand, POP r8 does not exist...
+movzx eax, byte [esp]
+inc esp
+mov dword [in_significand], eax
+; dword [in_negative_exponent] is already 0
+call convert_integer
+
+; the remaining bytes should never be printed with a leading minus sign
+mov byte [in_sign], 0
+
+jmp .bcd_write_loop
+.bcd_write_loop_end:
+
+; print a final newline
+push 0x0A
+call putchar
+add esp, 4
+
+mov esp, ebp
+pop ebp
+jmp normal_exit
 
 
 convert_fp:
@@ -341,10 +448,21 @@ mov eax, esp
 push dword [stdout]
 push eax
 call fputs
+add esp, 8
+
+mov eax, dword [terminal_char]
+test eax, eax
+jz .no_terminal_char
+
+push eax
+call putchar
+add esp, 4
+
+.no_terminal_char:
 
 mov esp, ebp
 pop ebp
-jmp true_ret
+jmp normal_exit
 
 
 section .data
@@ -356,6 +474,10 @@ greet_data db "Enter data: ", 0x00
 scan_fmt_radix db "%u", 0x00
 scan_fmt_type db " %c ", 0x00
 
+terminal_char dd 0x0A
+
+; fixed for now...
+bcd_radix dd 10
 
 section .bss align=4
 
