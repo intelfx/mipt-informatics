@@ -108,11 +108,13 @@ jne error_exit
 mov eax, dword [in_significand]
 
 ; since we generate output digits in reverse order (from least to most significant),
-; we'll write them to our stack frame to invert the order.
+; we'll write them to our stack frame, getting a big-endian character sequence.
 push ebp
 mov ebp, esp
 
-push byte 0
+; // sunrise by hand, PUSH r8 does not exist...
+dec esp
+mov byte [esp], 0
 
 ; now dispatch to writing two's complement if out_radix is 2
 cmp dword [out_radix], 2
@@ -138,7 +140,7 @@ add dl, 'A' - '0'
 .output_ok:
 
 ; store the character and go for the next one
-; // sunrise by hand, PUSH r8 does not exist :(
+; // sunrise by hand, PUSH r8 does not exist...
 dec esp
 mov byte [esp], dl
 jmp .loop
@@ -148,7 +150,7 @@ jmp .loop
 ; finally, write the minus sign if required
 cmp byte [in_sign], 0
 je .no_negate
-; // sunrise by hand, PUSH imm8 zero-extends the immediate :(
+; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
 mov byte [esp], '-'
 .no_negate:
@@ -176,7 +178,7 @@ jz .loop_end
 ; make a group split each 8 bits
 cmp ecx, 8
 jb .no_group_split
-; // sunrise by hand, PUSH imm8 zero-extends the immediate :(
+; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
 mov byte [esp], ' '
 xor ecx, ecx
@@ -191,7 +193,7 @@ setc dl
 add dl, '0'
 
 ; store the character and go for the next one
-; // sunrise by hand, PUSH r8 does not exist :(
+; // sunrise by hand, PUSH r8 does not exist...
 dec esp
 mov byte [esp], dl
 jmp .loop
@@ -202,7 +204,7 @@ jmp .loop
 .pad_loop:
 cmp ecx, 8
 jnb .pad_loop_end
-; // sunrise by hand, PUSH imm8 zero-extends the immediate :(
+; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
 mov byte [esp], '0'
 inc ecx
