@@ -151,9 +151,43 @@ jmp .loop
 
 .loop_end:
 
-; zero-pad the output as required
+; now zero-pad the output as required.
+; first, calculate amount of zero-padding required to make beautiful output
+; for input width of K bits.
+; range representable with N digits in [out_radix] is equal to [out_radix]^N, thus
+; we need to solve [out_radix]^N >= 2^K for minimal integer N.
+; The solution is minN = ceil (log_[out_radix] (2^K))
+;                      = ceil (log2 (2^K) / log2 ([out_radix]))
+;                      = ceil (K / log2 ([out_radix])).
+
+; K...
+fild dword [out_pad_to_bits]
+
+; ...log2 ([out_radix])...
+fld1
+fild dword [out_radix]
+fyl2x
+
+; ...K / log2 ([out_radix])...
+fdivp
+
+; ...now ceil()...
+sub esp, 2
+fstcw word [esp]
+and word [esp], ~(11 << 10) ; RC field
+or word [esp], (10b << 10) ; 10b -- rounding towards +infinity
+fldcw word [esp]
+add esp, 2
+frndint
+
+; ...and finally store the required padding in EDX.
+sub esp, 4
+fistp dword [esp]
+pop edx
+
+; do the padding
 .pad_loop:
-cmp ecx, dword [out_padding]
+cmp ecx, edx
 jnb .pad_loop_end
 ; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
@@ -191,12 +225,11 @@ test eax, eax
 jz .loop_end
 
 ; make a group split each 8 bits
-cmp ecx, 8
-jb .no_group_split
+test ecx, 3 ; 2^3 = 8
+jnz .no_group_split
 ; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
 mov byte [esp], ' '
-xor ecx, ecx
 .no_group_split:
 
 ; divide significand by output radix, remainder will be the next digit
@@ -217,8 +250,17 @@ jmp .loop
 
 ; zero-pad the last byte
 .pad_loop:
-cmp ecx, 8
+cmp ecx, dword [out_pad_to_bits]
 jnb .pad_loop_end
+
+; ...still make a group split each 8 bits
+test ecx, 3 ; 2^3 = 8
+jnz .pad_loop_no_group_split
+; // sunrise by hand, PUSH imm8 zero-extends the immediate...
+dec esp
+mov byte [esp], ' '
+.pad_loop_no_group_split:
+
 ; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
 mov byte [esp], '0'
@@ -281,36 +323,6 @@ jmp .loop
 .loop_end:
 
 ; now output the BCD chain [ESP; EBP) byte-by-byte
-
-; first, calculate amount of zero-padding required to make beautiful output.
-; range representable with N digits in [out_radix] is equal to [out_radix]^N, thus
-; we need to solve [out_radix]^N >= 256 for minimal integer N.
-; The solution is minN = ceil (log_[out_radix] (256))
-;                      = ceil (log2 (256) / log2 ([out_radix]))
-;                      = ceil (8 / log2 ([out_radix])).
-
-; 8...
-push 8
-fild dword [esp]
-
-; ...log2 ([out_radix])...
-fld1
-fild dword [out_radix]
-fyl2x
-
-; ...8 / log2 ([out_radix])...
-fdivp
-
-; ...now ceil()...
-fstcw word [esp]
-and word [esp], ~(11 << 10) ; RC field
-or word [esp], (10b << 10) ; 10b -- rounding towards +infinity
-fldcw word [esp]
-frndint
-
-; ...and finally store the padding.
-fistp dword [esp]
-pop dword [out_padding]
 
 ; we'll want to terminate bytes of the BCD sequence with spaces rather than newlines
 mov dword [terminal_char], ' '
@@ -479,11 +491,13 @@ terminal_char dd 0x0A
 ; fixed for now...
 bcd_radix dd 10
 
+; default padding is to a byte boundary
+out_pad_to_bits dd 8
+
 section .bss align=4
 
 in_radix resd 1
 out_radix resd 1
-out_padding resd 1
 conversion_type resb 1
 resd 3 ; align
 
