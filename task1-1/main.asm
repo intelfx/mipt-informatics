@@ -8,8 +8,7 @@ extern stdout
 global main
 
 ;
-; We'll use printf for printing greeting messages and reading radices
-; (as this is auxiliary).
+; We'll use scanf for reading radices and the conversion mode (as this is auxiliary).
 ;
 
 section .text
@@ -325,7 +324,7 @@ jmp .loop
 ; now output the BCD chain [ESP; EBP) byte-by-byte
 
 ; we'll want to terminate bytes of the BCD sequence with spaces rather than newlines
-mov dword [terminal_char], ' '
+mov byte [terminal_char], ' '
 
 .bcd_write_loop:
 
@@ -462,7 +461,7 @@ push eax
 call fputs
 add esp, 8
 
-mov eax, dword [terminal_char]
+movzx eax, byte [terminal_char]
 test eax, eax
 jz .no_terminal_char
 
@@ -485,13 +484,14 @@ greet_type db "Say type of conversion [i(nteger), f(p), b(cd), p(acked_bcd)]: ",
 greet_data db "Enter data: ", 0x00
 scan_fmt_radix db "%u", 0x00
 scan_fmt_type db " %c ", 0x00
+terminal_char db 0x0A
 
-terminal_char dd 0x0A
+align 4, db 0
 
 ; fixed for now...
 bcd_radix dd 10
 
-; default padding is to a byte boundary
+; default is to pad a byte boundary
 out_pad_to_bits dd 8
 
 section .bss align=4
@@ -499,7 +499,7 @@ section .bss align=4
 in_radix resd 1
 out_radix resd 1
 conversion_type resb 1
-resd 3 ; align
+alignb 4
 
 in_significand resd 1
 in_negative_exponent resd 1 ; in fact, this is 'dot position' from least significant digit in the input
