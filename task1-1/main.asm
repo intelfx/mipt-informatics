@@ -356,6 +356,151 @@ jmp normal_exit
 
 convert_fp:
 
+;
+; first, we need to reconstruct the floating-point value as
+; [in_significand] * [in_radix]^(-[in_negative_exponent]).
+;
+; we have the following primitives:
+;  fyl2x: y * log2(x)
+;  f2xm1: 2^x - 1 // x lies in [-1; 1]
+;  fscale: x * 2^y // y is integer
+;
+; thus, let S be significand, R be radix and E be exponent, let's rewrite as follows:
+;  VALUE = S * R^E
+;        = S * 2^(log2(R^E))
+;        = S * 2^(E*log2(R))
+;        = S * 2^((floor(E*log2(R)) + rem(E*log2(R)))
+;        = S * 2^floor(E*log2(R)) * 2^rem(E*log2(R))
+;        = S * 2^floor(E*log2(R)) * (2^rem(E*log2(R)) - 1 + 1)
+
+; load negative exponent -E
+fild dword [in_negative_exponent]
+; get exponent E
+fchs
+; load radix R
+fild dword [in_radix]
+
+; compute ST1 * log2(ST0) = E * log2(R)
+fyl2x
+
+; now ST1 = E*log2(R), ST0 = floor(ST1) = floor(E*log2(R))
+fld st0
+sub esp, 2
+fstcw word [esp]
+and word [esp], ~(11 << 10) ; RC field
+or word [esp], (11b << 10) ; 11b -- rounding towards 0
+fldcw word [esp]
+add esp, 2
+frndint
+
+; now ST0 = E*log2(R), ST1 = floor(E*log2(R))
+fxch
+; now ST0 = ST0 - ST1 = rem(E*log2(R))
+fsub st0, st1
+
+; now ST0 = 2^rem(E*log2(R))
+f2xm1
+fld1
+faddp
+
+; now ST0 = ST0 * 2^ST1 = 2^rem(E*log2(R)) * 2^floor(E*log2(R))
+fscale
+
+; now ST0 = S * ST0 = VALUE
+fimul dword [in_significand]
+
+; ...and restore the sign
+cmp byte [in_sign], 0
+jz .no_sign_change
+fchs
+.no_sign_change:
+
+; now write the outputs
+; we force exponent and sign to 0 because we are now printing bare raw representation
+mov dword [in_negative_exponent], 0
+mov byte [in_sign], 0
+
+; we'll want to zero-pad each written value to a dword boundary
+mov dword [out_pad_to_bits], 32
+
+; now write the single precision
+
+; greeting...
+push dword [stdout]
+push fp_greet_single
+call fputs
+add esp, 8
+
+; ...and the only dword.
+fst dword [in_significand]
+call convert_integer
+
+; now write the double precision -- it's a bit more complex.
+; we'll have to store the double-precision value in the stack and then
+; print high and low dwords separately.
+; of course, that would work only if [out_radix] is an exact power of two.
+
+mov eax, dword [out_radix]
+dec eax
+and eax, dword [out_radix]
+jnz normal_exit
+
+; greeting...
+push dword [stdout]
+push fp_greet_double
+call fputs
+add esp, 8
+
+sub esp, 8
+fst qword [esp]
+
+; ...most significant dword...
+mov eax, dword [esp+4]
+mov dword [in_significand], eax
+mov byte [terminal_char], 0
+call convert_integer
+
+; ...least significant dword.
+mov eax, dword [esp]
+mov dword [in_significand], eax
+mov byte [terminal_char], 0x0A
+call convert_integer
+
+; finally, the extended precision (80 bit).
+; a bit of loop unrolling.
+
+; greeting...
+push dword [stdout]
+push fp_greet_extended
+call fputs
+add esp, 8
+
+sub esp, 2 ; two remaining bytes
+fstp tword [esp] ; here we pop the value from x87 stack -- we no longer need it, and FST m80 does not exist.
+
+; most significant word... pad it to a word instead.
+mov dword [out_pad_to_bits], 16
+movzx eax, word [esp+8]
+mov dword [in_significand], eax
+mov byte [terminal_char], 0
+call convert_integer
+
+; ...next to most significant dword... restore dword padding.
+mov dword [out_pad_to_bits], 32
+mov eax, dword [esp+4]
+mov dword [in_significand], eax
+; byte [terminal_char] is already 0
+call convert_integer
+
+; ...least significant dword.
+mov eax, dword [esp]
+mov dword [in_significand], eax
+mov byte [terminal_char], 0x0A
+call convert_integer
+
+; that's all, folks!
+add esp, 10
+jmp normal_exit
 
 read_input:
 
@@ -481,7 +626,9 @@ section .data
 greet_in_radix db "Enter input radix: ", 0x00
 greet_out_radix db "Enter output radix: ", 0x00
 greet_type db "Say type of conversion [i(nteger), f(p), b(cd), p(acked_bcd)]: ", 0x00
-greet_data db "Enter data: ", 0x00
+fp_greet_single   db "IEEE754 single-precision representation:   ", 0x00
+fp_greet_double   db "IEEE754 double-precision representation:   ", 0x00
+fp_greet_extended db "IEEE754 extended-precision representation: ", 0x00
 scan_fmt_radix db "%u", 0x00
 scan_fmt_type db " %c ", 0x00
 terminal_char db 0x0A
