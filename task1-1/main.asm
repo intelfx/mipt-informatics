@@ -136,7 +136,7 @@ add dl, '0'
 ; check if it should've been a letter
 cmp dl, '9'
 jna .output_ok
-add dl, 'A' - '0'
+add dl, 'A' - ('0' + 10)
 .output_ok:
 
 ; store the character and go for the next one
