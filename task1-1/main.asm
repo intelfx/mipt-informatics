@@ -225,7 +225,7 @@ test eax, eax
 jz .loop_end
 
 ; make a group split each 8 bits
-test ecx, 3 ; 2^3 = 8
+test ecx, 7 ; 8-1
 jnz .no_group_split
 ; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
@@ -254,7 +254,7 @@ cmp ecx, dword [out_pad_to_bits]
 jnb .pad_loop_end
 
 ; ...still make a group split each 8 bits
-test ecx, 3 ; 2^3 = 8
+test ecx, 7 ; 8-1
 jnz .pad_loop_no_group_split
 ; // sunrise by hand, PUSH imm8 zero-extends the immediate...
 dec esp
