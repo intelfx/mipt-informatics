@@ -121,6 +121,9 @@ cmp dword [out_radix], 2
 je convert_integer_twos_complement
 
 ; otherwise continue with normal implementation
+
+xor ecx, ecx
+
 .loop:
 
 test eax, eax
@@ -143,9 +146,21 @@ add dl, 'A' - ('0' + 10)
 ; // sunrise by hand, PUSH r8 does not exist...
 dec esp
 mov byte [esp], dl
+inc ecx
 jmp .loop
 
 .loop_end:
+
+; zero-pad the output as required
+.pad_loop:
+cmp ecx, dword [out_padding]
+jnb .pad_loop_end
+; // sunrise by hand, PUSH imm8 zero-extends the immediate...
+dec esp
+mov byte [esp], '0'
+inc ecx
+jmp .pad_loop
+.pad_loop_end:
 
 ; finally, write the minus sign if required
 cmp byte [in_sign], 0
@@ -183,7 +198,6 @@ dec esp
 mov byte [esp], ' '
 xor ecx, ecx
 .no_group_split:
-inc ecx
 
 ; divide significand by output radix, remainder will be the next digit
 shr eax, 1
@@ -196,6 +210,7 @@ add dl, '0'
 ; // sunrise by hand, PUSH r8 does not exist...
 dec esp
 mov byte [esp], dl
+inc ecx
 jmp .loop
 
 .loop_end:
@@ -346,6 +361,7 @@ section .bss align=4
 
 in_radix resd 1
 out_radix resd 1
+out_padding resd 1
 conversion_type resb 1
 resd 3 ; align
 
