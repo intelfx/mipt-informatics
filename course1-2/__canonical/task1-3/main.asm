@@ -13,9 +13,11 @@ main:
 
 mov eax, 1
 mov ebx, 2
-add eax, ebx
+sub eax, ebx
 
-call set_czso
+call print_flags
+
+;call set_czso
 
 xor eax, eax
 ret

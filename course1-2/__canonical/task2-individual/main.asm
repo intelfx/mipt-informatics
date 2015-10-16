@@ -691,6 +691,7 @@ section .bss
 
 input_size resd 1
 output_size resd 1
+output_ptr resd 1
 input resb MAX_TEXT_SIZE + 1
 output resb MAX_TEXT_SIZE * 2 + 1 ; for rule 2.3
 
@@ -715,8 +716,6 @@ rule_2_4_desc db "All non-first occurrences of the first character in the text a
 rule_2_5_desc db "All characters with multiple occurrences are removed from the text", 0
 rule_2_6_desc db "All characters equal to the previous one are removed", 0
 
-output_ptr dd input
-
-property_ptr dd property_6
-rule_1_ptr dd rule_1_6
-rule_2_ptr dd rule_2_6
+property_ptr dd property_1
+rule_1_ptr dd rule_1_1
+rule_2_ptr dd rule_2_1

@@ -173,7 +173,7 @@ fdivp
 ; ...now ceil()...
 sub esp, 2
 fstcw word [esp]
-and word [esp], ~(11 << 10) ; RC field
+and word [esp], ~(11b << 10) ; RC field
 or word [esp], (10b << 10) ; 10b -- rounding towards +infinity
 fldcw word [esp]
 add esp, 2
@@ -387,7 +387,7 @@ fyl2x
 fld st0
 sub esp, 2
 fstcw word [esp]
-and word [esp], ~(11 << 10) ; RC field
+and word [esp], ~(11b << 10) ; RC field
 or word [esp], (11b << 10) ; 11b -- rounding towards 0
 fldcw word [esp]
 add esp, 2
