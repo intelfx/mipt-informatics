@@ -46,7 +46,7 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	r = cat_fd(in_fd, pipe_wr_fd, pipe_buffer_size(pipe_wr_fd), 0);
+	r = cat_fd(in_fd, pipe_wr_fd, pipe_buffer_size(pipe_wr_fd));
 	switch (r) {
 	case RESULT_OK:
 		r = 0;

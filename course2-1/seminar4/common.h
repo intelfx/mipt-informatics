@@ -39,7 +39,6 @@ enum cat_fd_result
 {
 	RESULT_OK,
 	RESULT_READ_NIL,  /* EOF */
-	RESULT_READ_AGAIN,
 	RESULT_READ_ERR,
 	RESULT_WRITE_ERR, /* or a short write */
 	RESULT_MISC_ERR
@@ -52,9 +51,6 @@ int cat_fd_iter(int fd_in, int fd_out, char *buf, size_t buffer_size)
 	read_bytes = read(fd_in, buf, buffer_size);
 
 	if (read_bytes < 0) {
-		if (errno == EAGAIN)
-			return RESULT_READ_AGAIN;
-
 		fprintf(stderr, "Failed to read() %zd bytes: %m\n", buffer_size);
 		return RESULT_READ_ERR;
 	} else if (read_bytes == 0) {
@@ -74,7 +70,7 @@ int cat_fd_iter(int fd_in, int fd_out, char *buf, size_t buffer_size)
 	return RESULT_OK;
 }
 
-int cat_fd(int fd_in, int fd_out, size_t buffer_size, int start_in_nonblock)
+int cat_fd(int fd_in, int fd_out, size_t buffer_size)
 {
 	int r;
 	char *buf = malloc(buffer_size);
@@ -85,46 +81,16 @@ int cat_fd(int fd_in, int fd_out, size_t buffer_size, int start_in_nonblock)
 	}
 
 
-	if (start_in_nonblock) {
-		/*
-		 * First iteration in nonblocking mode.
-		 */
-		
-		r = cat_fd_iter(fd_in, fd_out, buf, buffer_size);
-		switch (r) {
-		/*
-		 * Either a successful read or an EAGAIN due to non-blocking mode.
-		 * We're not going to spin-wait, anyway.
-		 */
-		case RESULT_READ_AGAIN:
-		case RESULT_OK:
-			r = RESULT_OK;
-			break;
-
+	/*
+	 * First iteration is separated to detect early EOFs.
+	 */
+	
+	r = cat_fd_iter(fd_in, fd_out, buf, buffer_size);
+	if (r != RESULT_OK) {
 		/*
 		 * Either an error or an EOF-before-all.
 		 */
-		default:
-			goto cleanup;
-		}
-
-		/*
-		 * Set blocking mode back.
-		 */
-
-		r = fcntl(fd_in, F_GETFL);
-		if (r < 0) {
-			fprintf(stderr, "Failed to fcntl(F_GETFL): %m\n");
-			r = RESULT_MISC_ERR;
-			goto cleanup;
-		}
-
-		r = fcntl(fd_in, F_SETFL, r & ~O_NONBLOCK);
-		if (r < 0) {
-			fprintf(stderr, "Failed to fcntl(F_SETFL) to clear O_NONBLOCK: %m\n");
-			r = RESULT_MISC_ERR;
-			goto cleanup;
-		}
+		goto cleanup;
 	}
 
 	for (;;) {
@@ -147,7 +113,6 @@ int cat_fd(int fd_in, int fd_out, size_t buffer_size, int start_in_nonblock)
 		 * Otherwise, it's an error.
 		 */
 		default:
-			assert(r != RESULT_READ_AGAIN);
 			goto cleanup;
 		}
 	}
