@@ -21,6 +21,8 @@
 #include <dirent.h>
 #include <time.h>
 #include <locale.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
 
 /*
  * Logging
@@ -28,6 +30,7 @@
 
 #define log(fmt, ...) do { int _errno = errno; fprintf (stderr, fmt "\n", ## __VA_ARGS__); errno = _errno; } while (0)
 #define die(fmt, ...) do { log(fmt, ## __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+#define die_ret(fmt, ...) do { log(fmt, ## __VA_ARGS__); return 1; } while (0)
 #define chk(expr, fmt, ...) do { if (!(expr)) die(fmt, ## __VA_ARGS__); } while (0)
 
 /*
@@ -484,4 +487,247 @@ static inline const char *get_pipe_server_guard_path(void)
 static inline const char *get_pipe_client_path_by_pid(int pid)
 {
 	return snprintf_static("fifo.slave-%d", pid);
+}
+
+/*
+ * XSI (System V) shared memory and semaphore API operations.
+ */
+
+void shm_unget(int shm)
+{
+	if (shm > 0) {
+		int r = shmctl(shm, IPC_RMID, NULL);
+		if (r < 0 && errno != EINVAL) {
+			log("Failed to shmctl(IPC_RMID) the shared memory segment %d: %m", shm);
+		}
+	}
+}
+
+DEFINE_TRIVIAL_CLEANUP_FUNC(int, shm_unget)
+#define _cleanup_shm_ \
+		_cleanup_(shm_ungetp)
+
+static inline int shm_get_and_attach(int ipc_key, size_t size, int mode, bool *shm_created, void **result)
+{
+	/* first, get the existing shared memory segment */
+	_cleanup_shm_ int shm = shmget(ipc_key, size, 0);
+	void *memory;
+	int r;
+
+	if (shm > 0) {
+		/* OK */
+		*shm_created = false;
+	} else if (errno != ENOENT) {
+		/* failed, and failure is not "inexistent" */
+		log("Failed to initially shmget() the shared memory segment: %m");
+	} else {
+		/* failed and failure is "inexistent", try to create it */
+		shm = shmget(ipc_key, size, IPC_CREAT | mode);
+		if (shm > 0) {
+			*shm_created = true;
+		} else if (errno != EEXIST) {
+			/* failed and not due to the race */
+			log("Failed to shmget(IPC_CREAT) a shared memory segment of %zu bytes: %m", size);
+		} else {
+			/* lost the race against another shm_get_and_attach(), repeat everything */
+			return shm_get_and_attach(ipc_key, size, mode, shm_created, result);
+		}
+	}
+
+	memory = shmat(shm, NULL, 0);
+	if (memory == (void *)-1) {
+		log("Failed to shmat() the shared memory segment %d: %m", shm);
+		return -1;
+	}
+
+	/* all done, avoid cleanup handler */
+	*result = memory;
+	r = shm; shm = 0;
+	return r;
+}
+
+void sem_unget(int sem)
+{
+	if (sem > 0) {
+		int r = semctl(sem, 0, IPC_RMID);
+		if (r < 0 && errno != EINVAL) {
+			log("Failed to semctl(IPC_RMID) the semaphore set %d: %m", sem);
+		}
+	}
+}
+
+DEFINE_TRIVIAL_CLEANUP_FUNC(int, sem_unget)
+#define _cleanup_sem_ \
+		_cleanup_(sem_ungetp)
+
+union semun {
+	int val;
+	struct semid_ds *ds;
+	unsigned short *array;
+} _sem_arg;
+
+static inline union semun sem_arg_array(unsigned short *sem_array)
+{
+	_sem_arg.array = sem_array;
+	return _sem_arg;
+}
+
+static inline union semun sem_arg_ds(struct semid_ds *sem_ds)
+{
+	_sem_arg.ds = sem_ds;
+	return _sem_arg;
+}
+
+static inline int sem_wait_for_otime(int sem)
+{
+	int r;
+
+	for (;;) {
+		struct semid_ds sem_ds;
+
+		r = semctl(sem, 0, IPC_STAT, sem_arg_ds(&sem_ds));
+		if (r < 0) {
+			log("Failed to semctl(IPC_STAT) the semaphore set %d: %m", sem);
+			return r;
+		}
+		if (sem_ds.sem_otime != 0) {
+			break;
+		}
+		log("Semaphore set created and not initialized -- sleeping for one second.");
+		sleep(1);
+	}
+
+	return r;
+}
+
+/*
+ * A shorthand for issuing a semop() for one operation.
+ */
+static inline int semop_one(int sem, unsigned short sem_num, short sem_op, short sem_flg)
+{
+	struct sembuf sembuf = {
+		.sem_num = sem_num,
+		.sem_op = sem_op,
+		.sem_flg = sem_flg
+	};
+
+	return semop(sem, &sembuf, 1);
+}
+
+/*
+ * Adjusts the semadj values of a semaphore set.
+ *
+ * For positive adjustments, this is done by performing the specified number of V operations
+ * and then the same number of P operations with SEM_UNDO specified, all in the same semop() call
+ * (hence atomically).
+ *
+ * Returns 1 if any adjustments were actually made, 0 if all values were zero, -1 (with errno set) on errors.
+ */
+static inline int sem_adj_many(int sem, int count, const short *adj_values)
+{
+	struct sembuf *sem_adj_ops;
+	size_t sem_adj_ops_nr = 0;
+	int r;
+
+	assert(count > 0);
+
+	/* we need `count * 2` operations at most */
+	sem_adj_ops = alloca(sizeof(struct sembuf) * count * 2);
+
+	for (unsigned short i = 0; i < count; ++i) {
+		if (adj_values[i] > 0) {
+			struct sembuf V = {
+				.sem_num = i,
+				.sem_op = adj_values[i],
+				.sem_flg = 0
+			}, P = {
+				.sem_num = i,
+				.sem_op = -adj_values[i],
+				.sem_flg = SEM_UNDO
+			};
+
+			sem_adj_ops[sem_adj_ops_nr++] = V;
+			sem_adj_ops[sem_adj_ops_nr++] = P;
+		} else if (adj_values[i] < 0) {
+			die("Setting negative initial semadj %d to semaphore %d of set %d is not implemented.", adj_values[i], i, sem);
+		}
+	}
+
+	if (sem_adj_ops_nr) {
+		r = semop(sem, sem_adj_ops, sem_adj_ops_nr);
+		if (r < 0) {
+			return r;
+		}
+		return 1;
+	} else {
+		return 0;
+	}
+}
+
+static inline int sem_get_and_init(int ipc_key, int count, int mode, const unsigned short *values, const short *adj_values)
+{
+	/* first, get the existing semaphore */
+	_cleanup_sem_ int sem = semget(ipc_key, count, 0);
+	int r;
+
+	if (sem > 0) {
+		/* OK, wait for it to be initialized */
+		int r = sem_wait_for_otime(sem);
+		if (r < 0) {
+			log("Failed to wait for initialization of the semaphore set %d: %m", sem);
+			return r;
+		}
+
+		/* ...and set our own semadj values */
+		r = sem_adj_many(sem, count, adj_values);
+		if (r < 0) {
+			log("Failed to set initial semadj values of the semaphore set %d: %m", sem);
+			return r;
+		}
+	} else if (errno != ENOENT) {
+		/* failed, and failure is not "inexistent" */
+		log("Failed to initially semget() the semaphore set: %m");
+	} else {
+		/* failed and failure is "inexistent", try to create it */
+		sem = semget(ipc_key, count, IPC_CREAT | mode);
+		if (sem > 0) {
+			/* OK, the initialization dance.
+			 *
+			 * - semctl(SETALL) does not set otime.
+			 * - our method of setting semadj values does set otime, but only if there was something to set.
+			 * - semop(..., { .sem_num = ..., .sem_op = 0, .sem_flg = IPC_NOWAIT }, 1) _hopefully_ sets otime
+			 *   and does nothing else (if I read the man correctly).
+			 *
+			 * So let's do everything outlined here. First -- SETALL. */
+			r = semctl(sem, 0, SETALL, sem_arg_array((unsigned short *)values));
+			if (r < 0) {
+				log("Failed to call semctl(SETALL) to initialize the semaphore set %d: %m", sem);
+				return r;
+			}
+
+			/* then the initial semadj values (and set otime coincidentally if there are any nonzero initial values) */
+			r = sem_adj_many(sem, count, adj_values);
+			if (r < 0) {
+				log("Failed to set initial semadj values of the semaphore set %d: %m", sem);
+				return r;
+			} else if (r == 0) {
+				/* there were no semadj initial values to set, let's perform a dummy operation to set otime. */
+				r = semop_one(sem, 0, 0, IPC_NOWAIT);
+				if (r < 0) {
+					log("Failed to do a dummy semop() on the semaphore set %d: %m", sem);
+					return r;
+				}
+			}
+		} else if (errno != EEXIST) {
+			/* failed and not due to the race */
+			log("Failed to semget(IPC_CREAT) the semaphore set: %m");
+		} else {
+			/* lost the race against another sem_get_and_init(), repeat everything */
+			return sem_get_and_init(ipc_key, count, mode, values, adj_values);
+		}
+	}
+
+	/* all done (or not), avoid cleanup handler */
+	r = sem; sem = 0;
+	return r;
 }
