@@ -25,10 +25,12 @@ int main(int argc, char **argv)
 	 * and gets receiver into a state where it can wait on the sender results.
 	 * 
 	 * The death detection is also configured for the sender.
+	 * 
+	 * Note that in sender, we do not remove IPCs on exit, because in our model the receiver is long-lived.
 	 */
 
-	_cleanup_shm_ int shm = -1;
-	_cleanup_sem_ int sem = -1;
+	int shm = -1;
+	int sem = -1;
 	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
 	shm = shm_init(ipc_key, &shared_memory);
@@ -45,9 +47,12 @@ int main(int argc, char **argv)
 	 * Now do the main loop.
 	 */
 
-	bool exiting = false;
+	r = semop_one(sem, SEMAPHORE_SESSION, -1, SEM_UNDO);
+	if (r < 0) {
+		die_ret("Failed to decrement SESSION semaphore: %m");
+	}
 
-	while (!exiting) {
+	for (;;) {
 		r = semop_one(sem, SEMAPHORE_MEMORY, -1, 0);
 		if (r < 0) {
 			die_ret("Failed to decrement MEMORY semaphore: %m");
@@ -75,7 +80,7 @@ int main(int argc, char **argv)
 			die_ret("Failed to read() %zu bytes from fd %d: %m", DATA_MAX, in_fd);
 		} else if (r == 0) {
 			shared_memory->snd_state = SND_EOF;
-			exiting = true;
+			break;
 		} else {
 			shared_memory->data_amount = r;
 			shared_memory->snd_state = SND_OK;
@@ -85,6 +90,14 @@ int main(int argc, char **argv)
 		if (r < 0) {
 			die_ret("Failed to increment DATA semaphore: %m");
 		}
+	}
+
+	/*
+	 * At correct exit (after EOF), V the DATA semaphore and zero out its semadj -- atomically.
+	 */
+	r = semop_one_and_adj(sem, SEMAPHORE_DATA, 1, 0, -2);
+	if (r < 0) {
+		die_ret("Failed to increment DATA semaphore and revert semadj adjustments: %m");
 	}
 
 	return 0;

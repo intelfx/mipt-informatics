@@ -1,5 +1,16 @@
 #include "common.h"
 
+static bool exiting = false;
+
+void exit_signal(int sig)
+{
+	exiting = true;
+
+	/* repeated delivery of the same signal will result in default reaction
+	 * (in case we are screwed) */
+	signal(sig, SIG_DFL);
+}
+
 int main(int argc, char **argv)
 {
 	int r;
@@ -12,6 +23,13 @@ int main(int argc, char **argv)
 	if (ipc_key < 0) {
 		die_ret("Failed to ftok() on file \"%s\" to generate an IPC key: %m", ipc_key_file);
 	}
+
+	/*
+	 * Initialize the exit handlers.
+	 */
+	signal(SIGTERM, &exit_signal);
+	signal(SIGHUP, &exit_signal);
+	signal(SIGINT, &exit_signal);
 
 	/*
 	 * Initialize the shared memory and the semaphores.
@@ -41,18 +59,30 @@ int main(int argc, char **argv)
 
 	int out_fd = STDOUT_FILENO;
 
-	for (;;) {
+	while(!exiting) {
 		r = semop_one(sem, SEMAPHORE_DATA, -1, 0);
 		if (r < 0) {
-			die_ret("Failed to decrement DATA semaphore: %m");
+			if (errno == EINTR) {
+				continue; /* check for exit condition and repeat */
+			} else {
+				die_ret("Failed to decrement DATA semaphore: %m");
+			}
 		}
 
 		switch(shared_memory->snd_state) {
 		case SND_OK:
+			r = write(out_fd, shared_memory->data, shared_memory->data_amount);
+			if (r < 0) {
+				shared_memory->rcv_state = RCV_IOERROR;
+				die_ret("Failed to write() %zu bytes to fd %d: %m", shared_memory->data_amount, out_fd);
+			} else if ((size_t)r != shared_memory->data_amount) {
+				shared_memory->rcv_state = RCV_IOERROR;
+				die_ret("Short write() %d bytes out of %zu to fd %d: %m", r, shared_memory->data_amount, out_fd);
+			}
 			break;
 
 		case SND_EOF:
-			return 0; /* no need to do anything, the sender exits right away after V'ing DATA and letting us here */
+			break; /* we effectively reinitialize the shared memory, V the MEMORY semaphore and begin waiting for the next client. */
 
 		case SND_IOERROR:
 			die_ret("Sender has reported an I/O error -- exiting.");
@@ -65,16 +95,6 @@ int main(int argc, char **argv)
 		}
 
 		shared_memory->snd_state = SND_NOT_DONE;
-
-		r = write(out_fd, shared_memory->data, shared_memory->data_amount);
-		if (r < 0) {
-			shared_memory->rcv_state = RCV_IOERROR;
-			die_ret("Failed to write() %zu bytes to fd %d: %m", shared_memory->data_amount, out_fd);
-		} else if ((size_t)r != shared_memory->data_amount) {
-			shared_memory->rcv_state = RCV_IOERROR;
-			die_ret("Short write() %d bytes out of %zu to fd %d: %m", r, shared_memory->data_amount, out_fd);
-		}
-
 		shared_memory->rcv_state = RCV_OK;
 
 		r = semop_one(sem, SEMAPHORE_MEMORY, 1, 0);
@@ -82,4 +102,6 @@ int main(int argc, char **argv)
 			die_ret("Failed to increment MEMORY semaphore: %m");
 		}
 	}
+
+	return 0;
 }

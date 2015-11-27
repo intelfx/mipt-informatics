@@ -619,6 +619,45 @@ static inline int semop_one(int sem, unsigned short sem_num, short sem_op, short
 }
 
 /*
+ * A shorthand for issuing a semop() for one operation and arbitrary adjustment of semadj.
+ */
+
+static inline int semop_one_and_adj(int sem, unsigned short sem_num, short sem_op, short sem_flg, short adj)
+{
+	struct sembuf sembuf[3] = {
+		{
+			.sem_num = sem_num,
+			.sem_op = sem_op,
+			.sem_flg = sem_flg
+		},
+		{
+			.sem_num = sem_num
+		},
+		{
+			.sem_num = sem_num
+		}
+	};
+
+	size_t sembuf_nr = 1;
+
+	if (adj > 0) {
+		sembuf[1].sem_op = adj;
+		sembuf[1].sem_flg = 0;
+		sembuf[2].sem_op = -adj;
+		sembuf[2].sem_flg = SEM_UNDO;
+		sembuf_nr = 3;
+	} else if (adj < 0) {
+		sembuf[1].sem_op = -adj;
+		sembuf[1].sem_flg = SEM_UNDO;
+		sembuf[2].sem_op = adj;
+		sembuf[2].sem_flg = 0;
+		sembuf_nr = 3;
+	}
+
+	return semop(sem, sembuf, sembuf_nr);
+}
+
+/*
  * Adjusts the semadj values of a semaphore set.
  *
  * For positive adjustments, this is done by performing the specified number of V operations
@@ -639,21 +678,22 @@ static inline int sem_adj_many(int sem, int count, const short *adj_values)
 	sem_adj_ops = alloca(sizeof(struct sembuf) * count * 2);
 
 	for (unsigned short i = 0; i < count; ++i) {
-		if (adj_values[i] > 0) {
-			struct sembuf V = {
-				.sem_num = i,
-				.sem_op = adj_values[i],
-				.sem_flg = 0
-			}, P = {
-				.sem_num = i,
-				.sem_op = -adj_values[i],
-				.sem_flg = SEM_UNDO
-			};
+		struct sembuf adjust = {
+			.sem_num = i,
+			.sem_op = adj_values[i],
+			.sem_flg = 0
+		}, invert_and_undo = {
+			.sem_num = i,
+			.sem_op = -adj_values[i],
+			.sem_flg = SEM_UNDO
+		};
 
-			sem_adj_ops[sem_adj_ops_nr++] = V;
-			sem_adj_ops[sem_adj_ops_nr++] = P;
+		if (adj_values[i] > 0) {
+			sem_adj_ops[sem_adj_ops_nr++] = adjust; /* V */
+			sem_adj_ops[sem_adj_ops_nr++] = invert_and_undo; /* P */
 		} else if (adj_values[i] < 0) {
-			die("Setting negative initial semadj %d to semaphore %d of set %d is not implemented.", adj_values[i], i, sem);
+			sem_adj_ops[sem_adj_ops_nr++] = invert_and_undo; /* V */
+			sem_adj_ops[sem_adj_ops_nr++] = adjust; /* P */
 		}
 	}
 

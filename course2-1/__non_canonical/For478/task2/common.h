@@ -9,6 +9,7 @@ static const int ipc_key_proj_id = 0;
 enum semaphore_id {
 	SEMAPHORE_MEMORY,
 	SEMAPHORE_DATA,
+	SEMAPHORE_SESSION,
 	_SEMAPHORE_COUNT
 };
 
@@ -41,15 +42,14 @@ struct shared_memory {
 static const unsigned short semaphore_init_values[_SEMAPHORE_COUNT] = {
 	[SEMAPHORE_MEMORY] = 1, /* memory is ready to accept data */
 	[SEMAPHORE_DATA] = 0, /* there is no data in the memory at start */
+	[SEMAPHORE_SESSION] = 1, /* session is ready to begin */
 };
 
 static const short semaphore_adj_values_rcv[_SEMAPHORE_COUNT] = {
 	[SEMAPHORE_MEMORY] = 2, /* on death, receiver wants sender to iterate freely */
-	[SEMAPHORE_DATA] = 0,
 };
 
 static const short semaphore_adj_values_snd[_SEMAPHORE_COUNT] = {
-	[SEMAPHORE_MEMORY] = 0,
 	[SEMAPHORE_DATA] = 2, /* on death, sender wants receiver to iterate freely */
 };
 
