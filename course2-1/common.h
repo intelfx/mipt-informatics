@@ -526,7 +526,7 @@ static inline int shm_get_and_attach(int ipc_key, size_t size, int mode, bool *s
 		log("Failed to initially shmget() the shared memory segment: %m");
 	} else {
 		/* failed and failure is "inexistent", try to create it */
-		shm = shmget(ipc_key, size, IPC_CREAT | mode);
+		shm = shmget(ipc_key, size, IPC_CREAT | IPC_EXCL | mode);
 		if (shm > 0) {
 			*shm_created = true;
 		} else if (errno != EEXIST) {
@@ -733,7 +733,7 @@ static inline int sem_get_and_init(int ipc_key, int count, int mode, const unsig
 		log("Failed to initially semget() the semaphore set: %m");
 	} else {
 		/* failed and failure is "inexistent", try to create it */
-		sem = semget(ipc_key, count, IPC_CREAT | mode);
+		sem = semget(ipc_key, count, IPC_CREAT | IPC_EXCL | mode);
 		if (sem > 0) {
 			/* OK, the initialization dance.
 			 *
