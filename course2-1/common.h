@@ -507,6 +507,10 @@ DEFINE_TRIVIAL_CLEANUP_FUNC(int, shm_unget)
 #define _cleanup_shm_ \
 		_cleanup_(shm_ungetp)
 
+DEFINE_TRIVIAL_CLEANUP_FUNC_UNSAFE(void *, shmdt)
+#define _cleanup_detach_ \
+		_cleanup_(shmdtp)
+
 static inline int shm_get_and_attach(int ipc_key, size_t size, int mode, bool *shm_created, void **result)
 {
 	/* first, get the existing shared memory segment */

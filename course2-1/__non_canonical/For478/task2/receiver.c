@@ -23,7 +23,7 @@ int main(int argc, char **argv)
 
 	_cleanup_shm_ int shm = -1;
 	_cleanup_sem_ int sem = -1;
-	struct shared_memory *shared_memory = NULL;
+	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
 	shm = shm_init(ipc_key, &shared_memory);
 	if (shm < 0) {
