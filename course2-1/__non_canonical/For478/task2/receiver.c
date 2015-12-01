@@ -60,8 +60,25 @@ int main(int argc, char **argv)
 	int out_fd = STDOUT_FILENO;
 
 	while(!exiting) {
+		/*
+		 * The DATA semaphore denotes availability of data in the shared memory.
+		 *
+		 * P the DATA semaphore, waiting for the sender to complete reading of the
+		 * next data chunk. The semaphore is V'ed by the sender at the end of its
+		 * iteration or in case of an unclean termination (twice).
+		 */
 		r = semop_one(sem, SEMAPHORE_DATA, -1, 0);
 		if (r < 0) {
+			/*
+			 * If a signal interrupts semop(), it returns with EINTR.
+			 * We use this behavior to implement "correct exiting" on receipt of common
+			 * termination signals -- the handler sets `exiting`, and we recheck it
+			 * when we get EINTR (rechecking is done because EINTR can happen due to any
+			 * signal, not only one of explicitly handled).
+			 * 
+			 * We don't bother doing any special handling of exit, because IPCs are anyway
+			 * destroyed, and the sender will get EIDRM on next semaphore operation.
+			 */
 			if (errno == EINTR) {
 				continue; /* check for exit condition and repeat */
 			} else {
@@ -71,6 +88,9 @@ int main(int argc, char **argv)
 
 		switch(shared_memory->snd_state) {
 		case SND_OK:
+			/*
+			 * If the sender is OK (that means, it completed its last iteration at least
+			 * to the point of 
 			r = write(out_fd, shared_memory->data, shared_memory->data_amount);
 			if (r < 0) {
 				shared_memory->rcv_state = RCV_IOERROR;

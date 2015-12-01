@@ -23,6 +23,7 @@
 #include <locale.h>
 #include <sys/shm.h>
 #include <sys/sem.h>
+#include <sys/wait.h>
 
 /*
  * Logging
@@ -568,18 +569,30 @@ union semun {
 	int val;
 	struct semid_ds *ds;
 	unsigned short *array;
-} _sem_arg;
+};
 
 static inline union semun sem_arg_array(unsigned short *sem_array)
 {
-	_sem_arg.array = sem_array;
-	return _sem_arg;
+	union semun sem_arg = {
+		.array = sem_array
+	};
+	return sem_arg;
 }
 
 static inline union semun sem_arg_ds(struct semid_ds *sem_ds)
 {
-	_sem_arg.ds = sem_ds;
-	return _sem_arg;
+	union semun sem_arg = {
+		.ds = sem_ds
+	};
+	return sem_arg;
+}
+
+static inline union semun sem_arg_val(int sem_val)
+{
+	union semun sem_arg = {
+		.val = sem_val
+	};
+	return sem_arg;
 }
 
 static inline int sem_wait_for_otime(int sem)
