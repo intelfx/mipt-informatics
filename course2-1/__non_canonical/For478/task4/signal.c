@@ -113,60 +113,20 @@ bool bitwise_pull_next_byte(struct bitwise_context *ctx, uint8_t byte)
 	return ret;
 }
 
-/*
- * A receiver context.
- */
-struct rcv_context {
+int rcv_main(int out_fd, int snd_pid)
+{
+	sigset_t sigset_listen_to_server = sigset_many(SIGUSR1, SIGUSR2, SIGTERM, 0);
 	struct bitwise_context accumulator;
 	uint8_t byte;
 	bool has_byte;
-	bool exiting;
-} rcv_context;
-
-void rcv_handler(int signal)
-{
-	switch(signal) {
-	case SIGUSR1:
-		bitwise_push_lsb(&rcv_context.accumulator, false, &rcv_context.has_byte, &rcv_context.byte);
-		break;
-
-	case SIGUSR2:
-		bitwise_push_lsb(&rcv_context.accumulator, true, &rcv_context.has_byte, &rcv_context.byte);
-		break;
-
-	case SIGTERM:
-		rcv_context.exiting = true;
-		break;
-	}
-}
-
-int rcv_main(int out_fd, int snd_pid)
-{
-	sigset_t sigset_listen_to_server = sigset_inverse_many(SIGUSR1, SIGUSR2, SIGTERM, 0);
-	struct sigaction signal_handler;
 	bool has_errors = false;
 	int r;
-
-	/*
-	 * First, configure signal handlers.
-	 * We use a common signal handler for all signals we wish to handle and distinguish the signals there.
-	 */
-
-	memzero(signal_handler);
-	signal_handler.sa_handler = &rcv_handler;
-	signal_handler.sa_flags = SA_NODEFER; /* we build the mask by ourselves */
-
-	r = sigaction_many(&signal_handler, SIGUSR1, SIGUSR2, SIGTERM, 0);
-	if (r < 0) {
-		log("Failed to set up signal handlers: %m");
-		goto kill_sender;
-	}
 
 	/*
 	 * Then, set global variables for our handlers.
 	 */
 
-	bitwise_init_rcv(&rcv_context.accumulator);
+	bitwise_init_rcv(&accumulator);
 
 	/*
 	 * Finally, kick the sender and wait for the data.
@@ -174,80 +134,72 @@ int rcv_main(int out_fd, int snd_pid)
 	 */
 
 	for (;;) {
-		kill(snd_pid, SIGUSR1);
-		sigsuspend(&sigset_listen_to_server);
+		int signal;
 
-		if (rcv_context.exiting) {
-			goto out;
+		r = kill(snd_pid, SIGUSR1);
+		if (r < 0) {
+			log("Failed to kill() sender with SIGUSR1: %m");
+			has_errors = true;
+			goto deinit_bitwise;
 		}
 
-		if (rcv_context.has_byte) {
-			rcv_context.has_byte = false;
-			r = write(out_fd, &rcv_context.byte, 1);
+		r = sigwait(&sigset_listen_to_server, &signal);
+		if (r < 0) {
+			log("Failed to sigwait() for the sender: %m");
+			has_errors = true;
+			goto deinit_bitwise;
+		}
+
+		switch(signal) {
+		case SIGUSR1:
+			bitwise_push_lsb(&accumulator, false, &has_byte, &byte);
+			break;
+
+		case SIGUSR2:
+			bitwise_push_lsb(&accumulator, true, &has_byte, &byte);
+			break;
+
+		case SIGTERM:
+			goto out;
+
+		default:
+			die("Switch error -- got signal %d", signal);
+		}
+
+		if (has_byte) {
+			has_byte = false;
+			r = write(out_fd, &byte, 1);
 			if (r < 0) {
 				log("Failed to write() one byte to fd %d: %m", out_fd);
-				has_errors = 1;
+				has_errors = true;
 				goto deinit_bitwise;
 			}
 		}
 	}
 
 deinit_bitwise:
-	r = bitwise_cleanup_rcv(&rcv_context.accumulator);
+	r = bitwise_cleanup_rcv(&accumulator);
 	if (r < 0) {
 		log("Failed to cleanup bitwise channel: %m");
 		has_errors = true;
 	}
 kill_sender:
-	kill(snd_pid, SIGTERM);
+	r = kill(snd_pid, SIGTERM);
+	if (r < 0) {
+		log("Failed to kill() the sender with SIGTERM: %m");
+		has_errors = true;
+	}
 out:
 	return has_errors;
 }
 
-/*
- * A sender context.
- */
-struct snd_context {
-	bool sending;
-	bool exiting;
-} snd_context;
-
-void snd_handler(int signal)
-{
-	switch(signal) {
-	case SIGUSR1:
-		snd_context.sending = true;
-		break;
-
-	case SIGTERM:
-		snd_context.exiting = true;
-		break;
-	}
-}
-
 int snd_main(int in_fd, int rcv_pid)
 {
-	sigset_t sigset_listen_to_client = sigset_inverse_many(SIGUSR1, SIGTERM);
-	struct sigaction signal_handler;
+	sigset_t sigset_listen_to_client = sigset_many(SIGUSR1, SIGTERM);
 	struct bitwise_context accumulator;
 	bool has_errors = false;
 	bool need_byte = true;
 	int r;
-
-	/*
-	 * First, configure signal handlers.
-	 * We use a common signal handler for all signals we wish to handle and distinguish the signals there.
-	 */
-
-	memzero(signal_handler);
-	signal_handler.sa_handler = &snd_handler;
-	signal_handler.sa_flags = SA_NODEFER; /* we build the mask by ourselves */
-
-	r = sigaction_many(&signal_handler, SIGUSR1, SIGTERM, 0);
-	if (r < 0) {
-		log("Failed to set up signal handlers: %m");
-		goto kill_receiver;
-	}
 
 	/*
 	 * Then, initialize the bitwise accumulator for sending.
@@ -260,15 +212,21 @@ int snd_main(int in_fd, int rcv_pid)
 	 */
 
 	for (;;) {
-		sigsuspend(&sigset_listen_to_client);
+		int signal;
 
-		if (snd_context.exiting) {
+		r = sigwait(&sigset_listen_to_client, &signal);
+		if (r < 0) {
+			log("Failed to sigwait() for the receiver: %m");
+			goto kill_receiver;
+		}
+
+		switch (signal) {
+		case SIGTERM:
 			log("Exiting on request of the client.");
 			has_errors = true;
 			goto out;
-		}
 
-		if (snd_context.sending) {
+		case SIGUSR1: {
 			bool bit;
 
 			if (need_byte) {
@@ -279,7 +237,7 @@ int snd_main(int in_fd, int rcv_pid)
 					goto kill_receiver;
 				} else if (r != 1) {
 					log("Failed to read() one byte from fd %d: %m", in_fd);
-					has_errors = 1;
+					has_errors = true;
 					goto kill_receiver;
 				}
 
@@ -289,12 +247,27 @@ int snd_main(int in_fd, int rcv_pid)
 				bit = bitwise_pull(&accumulator, &need_byte);
 			}
 
-			kill(rcv_pid, bit ? SIGUSR2 : SIGUSR1);
+			r = kill(rcv_pid, bit ? SIGUSR2 : SIGUSR1);
+			if (r < 0) {
+				log("Failed to kill() the receiver with SIGUSR1/2: %m");
+				has_errors = true;
+				goto kill_receiver;
+			}
+
+			break;
+		}
+
+		default:
+			die("Switch error -- got signal %d", signal);
 		}
 	}
 
 kill_receiver:
-	kill(rcv_pid, SIGTERM);
+	r = kill(rcv_pid, SIGTERM);
+	if (r < 0) {
+		log("Failed to kill() the receiver with SIGTERM: %m");
+		has_errors = true;
+	}
 out:
 	r = bitwise_cleanup_snd(&accumulator);
 	if (r < 0) {
