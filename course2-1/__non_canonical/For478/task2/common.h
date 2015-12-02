@@ -58,19 +58,28 @@ static const struct shared_memory shared_memory_init = {
 	.snd_state = SND_NOT_DONE,
 };
 
-static inline int sem_init(int ipc_key, const short *sem_adj_values)
+static inline int sem_init_master(int ipc_key, const short *sem_adj_values)
 {
-	return sem_get_and_init(ipc_key, _SEMAPHORE_COUNT, 0600, semaphore_init_values, sem_adj_values);
+	return sem_get_and_init_master(ipc_key, _SEMAPHORE_COUNT, 0600, semaphore_init_values, sem_adj_values);
 }
 
-static inline int shm_init(int ipc_key, struct shared_memory **result)
+static inline int shm_init_master(int ipc_key, struct shared_memory **result)
 {
-	bool shm_created;
-	int shm = shm_get_and_attach(ipc_key, IPC_SHM_SIZE, 0600, &shm_created, (void **)result);
+	int shm = shm_get_and_attach_master(ipc_key, IPC_SHM_SIZE, 0600, (void **)result);
 
-	if (shm_created) {
+	if (shm > 0) {
 		**result = shared_memory_init;
 	}
 
 	return shm;
+}
+
+static inline int sem_init_slave(int ipc_key, const short *sem_adj_values)
+{
+	return sem_get_and_init_slave(ipc_key, _SEMAPHORE_COUNT, sem_adj_values);
+}
+
+static inline int shm_init_slave(int ipc_key, struct shared_memory **result)
+{
+	return shm_get_and_attach_slave(ipc_key, IPC_SHM_SIZE, (void **)result);
 }

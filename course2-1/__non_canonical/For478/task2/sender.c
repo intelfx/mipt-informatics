@@ -33,12 +33,12 @@ int main(int argc, char **argv)
 	int sem = -1;
 	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
-	shm = shm_init(ipc_key, &shared_memory);
+	shm = shm_init_slave(ipc_key, &shared_memory);
 	if (shm < 0) {
 		die_ret("Failed to initialize the shared memory: %m");
 	}
 
-	sem = sem_init(ipc_key, semaphore_adj_values_snd);
+	sem = sem_init_slave(ipc_key, semaphore_adj_values_snd);
 	if (sem < 0) {
 		die_ret("Failed to initialize the semaphores for the sender: %m");
 	}
@@ -55,7 +55,7 @@ int main(int argc, char **argv)
 	 * their transmissions. The semaphore is V'ed by the receiver after
 	 * handling the sender termination (either clean or unclean).
 	 */
-	r = semop_one(sem, SEMAPHORE_SESSION, -1, 0);
+	r = semop_many(sem, 1, semop_entry(SEMAPHORE_SESSION, -1, 0));
 	if (r < 0) {
 		die_ret("Failed to decrement SESSION semaphore: %m");
 	}
@@ -70,19 +70,19 @@ int main(int argc, char **argv)
 		 * receiver at the end of its iteration or in case of an unclean termination
 		 * (twice).
 		 */
-		r = semop_one(sem, SEMAPHORE_MEMORY, -1, 0);
+		r = semop_many(sem, 1, semop_entry(SEMAPHORE_MEMORY, -1, 0));
 		if (r < 0) {
 			die_ret("Failed to decrement MEMORY semaphore: %m");
 		}
 
 		/*
 		 * See if the receiver did actually finish its last iteration.
-		 * If this variable is set to RCV_NOT_DONE, it means that the server
+		 * If this variable is set to RCV_NOT_DONE, it means that the receiver
 		 * has died on the last iteration. If it it set to RCV_OK, it means the opposite.
 		 * Then we reset the variable back to RCV_NOT_DONE.
 		 * 
-		 * The only case to handle is when server dies after setting the variable
-		 * to RCV_OK, but before it Vs the MEMORY semaphore and before sender sets it back.
+		 * The only case to handle is when receiver dies after setting the variable
+		 * to RCV_OK, but before it Vs the MEMORY semaphore and before sender sets it back to RCV_NOT_DONE.
 		 * This case is handled by twice-V'ing the MEMORY semaphore on receiver unclean
 		 * termination. 
 		 */
@@ -117,6 +117,10 @@ int main(int argc, char **argv)
 		}
 		shared_memory->rcv_state = RCV_NOT_DONE;
 
+		if (shared_memory->snd_state == SND_EOF) {
+			break;
+		}
+
 		/*
 		 * The DATA semaphore denotes availability of data in the shared memory.
 		 *
@@ -124,7 +128,7 @@ int main(int argc, char **argv)
 		 * chunk of data. This semaphore is P'ed by the receiver at the beginning of
 		 * its iteration.
 		 */
-		r = semop_one(sem, SEMAPHORE_DATA, 1, 0);
+		r = semop_many(sem, 1, semop_entry(SEMAPHORE_DATA, 1, 0));
 		if (r < 0) {
 			die_ret("Failed to increment DATA semaphore: %m");
 		}

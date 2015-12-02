@@ -13,6 +13,7 @@ void exit_signal(int sig)
 
 int main(int argc, char **argv)
 {
+	srand(time(NULL));
 	int r;
 
 	if (argc != 1) {
@@ -43,12 +44,12 @@ int main(int argc, char **argv)
 	_cleanup_sem_ int sem = -1;
 	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
-	shm = shm_init(ipc_key, &shared_memory);
+	shm = shm_init_master(ipc_key, &shared_memory);
 	if (shm < 0) {
 		die_ret("Failed to initialize the shared memory: %m");
 	}
 
-	sem = sem_init(ipc_key, semaphore_adj_values_rcv);
+	sem = sem_init_master(ipc_key, semaphore_adj_values_rcv);
 	if (sem < 0) {
 		die_ret("Failed to initialize the semaphores for the receiver: %m");
 	}
@@ -60,6 +61,8 @@ int main(int argc, char **argv)
 	int out_fd = STDOUT_FILENO;
 
 	while(!exiting) {
+		bool has_eof = false;
+
 		/*
 		 * The DATA semaphore denotes availability of data in the shared memory.
 		 *
@@ -67,7 +70,7 @@ int main(int argc, char **argv)
 		 * next data chunk. The semaphore is V'ed by the sender at the end of its
 		 * iteration or in case of an unclean termination (twice).
 		 */
-		r = semop_one(sem, SEMAPHORE_DATA, -1, 0);
+		r = semop_many(sem, 1, semop_entry(SEMAPHORE_DATA, -1, 0));
 		if (r < 0) {
 			/*
 			 * If a signal interrupts semop(), it returns with EINTR.
@@ -86,11 +89,24 @@ int main(int argc, char **argv)
 			}
 		}
 
+		/*
+		 * See if the sender did actually finish its last iteration.
+		 * If this variable is set to SND_NOT_DONE, it means that the sender
+		 * has died on the last iteration. If it it set to SND_OK, it means the opposite.
+		 * Then we reset the variable back to SND_NOT_DONE.
+		 * 
+		 * The only case to handle is when sender dies after setting the variable
+		 * to SND_OK, but before it Vs the DATA semaphore and before receiver sets it back to SND_NOT_DONE.
+		 * This case is handled by twice-V'ing the DATA semaphore on sender unclean
+		 * termination. 
+		 */
 		switch(shared_memory->snd_state) {
 		case SND_OK:
 			/*
 			 * If the sender is OK (that means, it completed its last iteration at least
-			 * to the point of 
+			 * to the point of setting snd_state), write the data to file.
+			 */
+			if (!(rand() % 50)) abort();
 			r = write(out_fd, shared_memory->data, shared_memory->data_amount);
 			if (r < 0) {
 				shared_memory->rcv_state = RCV_IOERROR;
@@ -102,7 +118,12 @@ int main(int argc, char **argv)
 			break;
 
 		case SND_EOF:
-			break; /* we effectively reinitialize the shared memory, V the MEMORY semaphore and begin waiting for the next client. */
+			/*
+			 * If the sender is done, V the SESSION semaphore in addition to whatever we typically do
+			 * and begin waiting for the next client.
+			 */
+			has_eof = true;
+			break;
 
 		case SND_IOERROR:
 			die_ret("Sender has reported an I/O error -- exiting.");
@@ -113,11 +134,29 @@ int main(int argc, char **argv)
 		default:
 			die_ret("Switch error");
 		}
-
-		shared_memory->snd_state = SND_NOT_DONE;
 		shared_memory->rcv_state = RCV_OK;
+		shared_memory->snd_state = SND_NOT_DONE;
 
-		r = semop_one(sem, SEMAPHORE_MEMORY, 1, 0);
+		/*
+		 * The MEMORY semaphore denotes availability of shared memory
+		 * for reading data into.
+		 *
+		 * V the MEMORY semaphore, allowing the sender to begin reading the new
+		 * chunk of data into memory. This semaphore is P'ed by the sender at the beginning of
+		 * its iteration.
+		 * 
+		 * If, on the other hand, the receiver did just finish its work and should've exited,
+		 * also V the SESSION semaphore, allowing the next sender in.
+		 * This is not done automatically at sender termination to allow us to see the EOF condition
+		 * before the next sender takes in and overwrites it with data and sets the OK status.
+		 */
+		if (has_eof) {
+			r = semop_many(sem, 1, semop_entry(SEMAPHORE_SESSION, 1, 0));
+			if (r < 0) {
+				die_ret("Failed to increment SESSION semaphore: %m");
+			}
+		}
+		r = semop_many(sem, 1, semop_entry(SEMAPHORE_MEMORY, 1, 0));
 		if (r < 0) {
 			die_ret("Failed to increment MEMORY semaphore: %m");
 		}
