@@ -100,7 +100,7 @@ int main(int argc, char **argv)
 
 		int child_pid = fork();
 		if (child_pid == 0) {
-			r = semop_one(sem, 0, -1, SEM_UNDO);
+			r = semop_many(sem, 1, semop_entry(0, -1, SEM_UNDO));
 			if (r < 0) {
 				die_ret("Failed to P the control semaphore %d: %m", sem);
 			}
