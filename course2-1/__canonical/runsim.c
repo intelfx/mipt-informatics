@@ -70,7 +70,8 @@ int main(int argc, char **argv)
 
 		_cleanup_free_ char **tokens = malloc(sizeof(char*));
 		size_t tokens_alloc = 1, tokens_nr = 0;
-		char *strtok_line = line, *strtok_saveptr = NULL;
+		_cleanup_free_ char *strtok_line = strdup(line);
+		char *strtok_saveptr = NULL;
 
 		assert(tokens);
 
@@ -100,9 +101,13 @@ int main(int argc, char **argv)
 
 		int child_pid = fork();
 		if (child_pid == 0) {
-			r = semop_many(sem, 1, semop_entry(0, -1, SEM_UNDO));
+			r = semop_many(sem, 1, semop_entry(0, -1, SEM_UNDO|IPC_NOWAIT));
 			if (r < 0) {
-				die_ret("Failed to P the control semaphore %d: %m", sem);
+				if (errno == EAGAIN) {
+					die_ret("Process limit exceeded, will not execute \"%s\".", line);
+				} else {
+					die_ret("Failed to P the control semaphore %d: %m", sem);
+				}
 			}
 
 			r = execvp(tokens[0], tokens);
