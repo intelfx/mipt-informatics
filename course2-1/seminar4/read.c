@@ -5,7 +5,7 @@ static const int FIFO_NR = 1000;
 int main(int argc, char **argv)
 {
 	if (argc != 2) {
-		fprintf(stderr, "This program expects one argument.\n");
+		log("This program expects one argument.");
 		return 1;
 	}
 
@@ -15,14 +15,14 @@ int main(int argc, char **argv)
 
 	in_fd = open(in_path, O_RDONLY);
 	if (in_fd < 0) {
-		fprintf(stderr, "Failed to open() input: %m\n");
+		log("Failed to open() input: %m");
 		r = 1;
 		goto cleanup;
 	}
 
 	for (int i = 1; i <= FIFO_NR; ++i) {
 		if (i < 0) {
-			fprintf(stderr, "Too many pipes already exist, cannot make a free index.\n");
+			log("Too many pipes already exist, cannot make a free index.");
 			r = 1;
 			goto cleanup;
 		}
@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 		if (r < 0) {
 			if (errno == EEXIST)
 				continue;
-			fprintf(stderr, "Failed to mkfifo() \"%s\": %m\n", fifo_path);
+			log("Failed to mkfifo() \"%s\": %m", fifo_path);
 			r = 1;
 			goto cleanup;
 		}
@@ -41,7 +41,7 @@ int main(int argc, char **argv)
 
 	pipe_wr_fd = open(fifo_path, O_WRONLY);
 	if (pipe_wr_fd < 0) {
-		fprintf(stderr, "Failed to open() write end on \"%s\": %m\n", fifo_path);
+		log("Failed to open() write end on \"%s\": %m", fifo_path);
 		r = 1;
 		goto cleanup;
 	}

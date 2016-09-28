@@ -5,8 +5,7 @@ static const int FIFO_NR = 1000;
 int main(int argc, char **argv)
 {
 	if (argc != 1) {
-		fprintf(stderr, "This program expects no arguments.\n");
-		return 1;
+		die("This program expects no arguments.");
 	}
 
 	int r;
@@ -21,7 +20,7 @@ int main(int argc, char **argv)
 		if (r < 0) {
 			if (errno == ENOENT)
 				continue;
-			fprintf(stderr, "Failed to rename() fifo \"%s\": %m", fifo_path);
+			log("Failed to rename() fifo \"%s\" -> \"%s\": %m", fifo_path, unique_name_buf);
 			r = 1;
 			goto cleanup;
 		}
@@ -36,28 +35,28 @@ int main(int argc, char **argv)
 		if (pipe_rd_fd < 0) {
 			if (errno == ENOENT)
 				continue;
-			fprintf(stderr, "Failed to open() \"%s\": %m\n", fifo_path);
+			log("Failed to open() read end on \"%s\": %m", fifo_path);
 			r = 1;
 			goto cleanup;
 		}
 
 		r = unlink(unique_name_buf);
 		if (r < 0) {
-			fprintf(stderr, "Failed to unlink() \"%s\": %m\n", fifo_path);
+			log("Failed to unlink() \"%s\": %m", fifo_path);
 			r = 1;
 			goto cleanup;
 		}
 
 		r = fcntl(pipe_rd_fd, F_GETFL);
 		if (r < 0) {
-			fprintf(stderr, "Failed to fcntl(F_GETFL): %m\n");
+			log("Failed to fcntl(F_GETFL): %m");
 			r = 1;
 			goto cleanup;
 		}
 
 		r = fcntl(pipe_rd_fd, F_SETFL, r & ~O_NONBLOCK);
 		if (r < 0) {
-			fprintf(stderr, "Failed to fcntl(F_SETFL) to clear O_NONBLOCK: %m\n");
+			log("Failed to fcntl(F_SETFL) to clear O_NONBLOCK: %m");
 			r = 1;
 			goto cleanup;
 		}
@@ -90,7 +89,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	fprintf(stderr, "No fifo found to read from.\n");
+	log("No fifo found to read from.");
 	r = 1;
 
 cleanup:

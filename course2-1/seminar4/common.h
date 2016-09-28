@@ -10,6 +10,10 @@
 #include <fcntl.h>
 #include <limits.h>
 
+#define log(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
+#define die(fmt, ...) do { log(fmt, ## __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
+#define die_ret(fmt, ...) do { log(fmt, ## __VA_ARGS__); return 1; } while (0)
+
 char *snprintf_static(const char *fmt, ...)
 {
 	static char buf[1024];
