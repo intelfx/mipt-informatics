@@ -1,44 +1,6 @@
-#define _DEFAULT_SOURCE 1
-#include <stdio.h>
-#include <stdarg.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <assert.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <limits.h>
-#include <signal.h>
+#pragma once
 
-#define log(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
-#define die(fmt, ...) do { log(fmt, ## __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
-#define die_ret(fmt, ...) do { log(fmt, ## __VA_ARGS__); return 1; } while (0)
-
-char *snprintf_static(const char *fmt, ...)
-{
-	static char buf[1024];
-	va_list ap;
-
-	va_start(ap, fmt);
-	vsnprintf(buf, 1024, fmt, ap);
-	va_end(ap);
-
-	return buf;
-}
-
-int pipe_buffer_size(int fd)
-{
-	int r;
-
-#ifdef F_GETPIPE_SZ
-		r = fcntl(fd, F_GETPIPE_SZ);
-		if (r < 0)
-#endif // F_GETPIPE_SZ
-			r = PIPE_BUF;
-
-		return r;
-}
+#include "common_util.h"
 
 int open_wronly_no_wait(const char *path, int flags)
 {
