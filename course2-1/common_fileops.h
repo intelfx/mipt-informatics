@@ -73,6 +73,27 @@ cleanup:
 	return r;
 }
 
+int fd_make_blocking(int fd)
+{
+	int r;
+
+	r = fcntl(fd, F_GETFL);
+	if (r < 0) {
+		log("Failed to fcntl(F_GETFL) fd %d: %m", fd);
+		return -1;
+	}
+
+	if (r & O_NONBLOCK) {
+		r = fcntl(fd, F_SETFL, r & ~O_NONBLOCK);
+		if (r < 0) {
+			log("Failed to fcntl(F_SETFL) fd %d to make blocking: %m", fd);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 enum cat_fd_result
 {
 	RESULT_OK,
@@ -126,7 +147,6 @@ int cat_fd(int fd_in, int fd_out, size_t buffer_size, int retry)
 		log("Failed to malloc() buffer of %zu bytes: %m", buffer_size);
 		return 1;
 	}
-
 
 	/*
 	 * First iteration is separated to detect early EOFs.
