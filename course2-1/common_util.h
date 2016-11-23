@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <string.h>
 
 /*
  * Logging

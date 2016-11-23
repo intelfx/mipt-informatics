@@ -26,39 +26,47 @@ int main(int argc, char **argv)
 	 * 
 	 * The death detection is also configured for the sender.
 	 * 
-	 * Note that in sender, we do not remove IPCs on exit, because in our model the receiver is long-lived.
+	 * Note that in sender, we do not remove IPCs on exit.
 	 */
 
 	int shm = -1;
 	int sem = -1;
 	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
-	shm = shm_init_slave(ipc_key, &shared_memory);
+	/*
+	 * Get/create and attach the shared memory. Let the receiver initialize it.
+	 */
+	shm = shm_get_and_attach(ipc_key, IPC_SHM_SIZE, 0600, (void **)&shared_memory);
 	if (shm < 0) {
 		die_ret("Failed to initialize the shared memory: %m");
 	}
 
-	sem = sem_init_slave(ipc_key, semaphore_adj_values_snd);
+	/*
+	 * Get/create the semaphore set. Let the receiver initialize it.
+	 */
+	sem = semget(ipc_key, _SEMAPHORE_COUNT, IPC_CREAT | 0600);
 	if (sem < 0) {
-		die_ret("Failed to initialize the semaphores for the sender: %m");
+		die_ret("Failed to semget() the semaphore set: %m");
+	}
+
+	/*
+	 * Grab the sender's mutex. It is incremented by the receiver after it initializes all state.
+	 * We don't release it at death, this is done by the receiver.
+	 *
+	 * Semadj values:
+	 * [SEMAPHORE_DATA] = 2, // on death, we want receiver to iterate freely
+	 */
+	r = semop_many(sem,
+	               1,
+	               semop_entry(SEMAPHORE_SND_MUTEX, -1, 0),
+	               semop_adj(SEMAPHORE_DATA, 2));
+	if (r < 0) {
+		die_ret("Failed to decrement SND_MUTEX and set semadj values for the sender: %m");
 	}
 
 	/*
 	 * Now do the main loop.
 	 */
-
-	/*
-	 * The SESSION semaphore mutually excludes senders from talking
-	 * to the receiver simultaneously.
-	 * 
-	 * P the SESSION semaphore, waiting for other senders to complete
-	 * their transmissions. The semaphore is V'ed by the receiver after
-	 * handling the sender termination (either clean or unclean).
-	 */
-	r = semop_many(sem, 1, semop_entry(SEMAPHORE_SESSION, -1, 0));
-	if (r < 0) {
-		die_ret("Failed to decrement SESSION semaphore: %m");
-	}
 
 	for (;;) {
 		/*
@@ -117,10 +125,6 @@ int main(int argc, char **argv)
 		}
 		shared_memory->rcv_state = RCV_NOT_DONE;
 
-		if (shared_memory->snd_state == SND_EOF) {
-			break;
-		}
-
 		/*
 		 * The DATA semaphore denotes availability of data in the shared memory.
 		 *
@@ -132,14 +136,10 @@ int main(int argc, char **argv)
 		if (r < 0) {
 			die_ret("Failed to increment DATA semaphore: %m");
 		}
-	}
 
-	/*
-	 * At correct exit (after EOF), V the DATA semaphore as well and zero out its semadj -- atomically.
-	 */
-	r = semop_one_and_adj(sem, SEMAPHORE_DATA, 1, 0, -2);
-	if (r < 0) {
-		die_ret("Failed to increment DATA semaphore and revert semadj adjustments: %m");
+		if (shared_memory->snd_state == SND_EOF) {
+			break;
+		}
 	}
 
 	return 0;
