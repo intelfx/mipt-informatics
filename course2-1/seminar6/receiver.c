@@ -1,3 +1,4 @@
+#include "../common_sem.h"
 #include "common.h"
 
 int main(int argc, char **argv)
@@ -19,10 +20,15 @@ int main(int argc, char **argv)
 	 * and gets receiver into a state where it can wait on the sender results.
 	 *
 	 * The death detection is also configured for the receiver.
+	 *
+	 * We do not remove the semaphore set because other receivers could have
+	 * opened it already, blocking on the wait-for-zero.
+	 * OTOH, we do remove the shared memory because any waiting receiver process
+	 * will be able to re-create it after acquiring the semaphore set.
 	 */
 
-	int shm = -1;
 	int sem = -1;
+	_cleanup_shm_ int shm = -1;
 	_cleanup_detach_ struct shared_memory *shared_memory = NULL;
 
 	/*
@@ -41,7 +47,8 @@ int main(int argc, char **argv)
 		die_ret("Failed to initialize the shared memory: %m");
 	}
 
-	*shared_memory = shared_memory_init;
+	shared_memory->rcv_state = RCV_OK;
+	shared_memory->snd_state = SND_NOT_DONE;
 
 	/*
 	 * Here goes the initial state. Explanations available.

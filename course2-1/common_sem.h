@@ -31,28 +31,16 @@ DEFINE_TRIVIAL_CLEANUP_FUNC_UNSAFE(void *, shmdt)
 
 static inline int shm_get_and_attach(int ipc_key, size_t size, int mode, void **result)
 {
-	/* first, get the existing shared memory segment */
-	_cleanup_shm_ int shm = shmget(ipc_key, size, 0);
+	/* first, get the existing shared memory segment or create it */
+	_cleanup_shm_ int shm = shmget(ipc_key, size, IPC_CREAT | mode);
 	void *memory;
 	int r;
 
 	if (shm > 0) {
 		/* OK */
-	} else if (errno != ENOENT) {
-		/* failed, and failure is not "inexistent" */
-		log("Failed to initially shmget() the shared memory segment: %m");
-	} else {
-		/* failed and failure is "inexistent", try to create it */
-		shm = shmget(ipc_key, size, IPC_CREAT | IPC_EXCL | mode);
-		if (shm > 0) {
-			/* OK */
-		} else if (errno != EEXIST) {
-			/* failed and not due to the race */
-			log("Failed to shmget(IPC_CREAT) a shared memory segment of %zu bytes: %m", size);
-		} else {
-			/* lost the race against another shm_get_and_attach(), repeat everything */
-			return shm_get_and_attach(ipc_key, size, mode, result);
-		}
+	} else  {
+		/* failed */
+		log("Failed to initially shmget() the shared memory segment of %zu bytes: %m", size);
 	}
 
 	if (shm > 0) {
@@ -181,7 +169,7 @@ static inline int semop_many(int sem, size_t ops_nr, ...)
  */
 static inline int sem_get_and_init(int ipc_key, int count, int mode)
 {
-	/* first, get the existing semaphore */
+	/* first, get the existing semaphore or create it */
 	_cleanup_sem_ int sem = semget(ipc_key, count, IPC_CREAT | mode);
 	int r;
 
