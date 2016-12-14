@@ -18,12 +18,22 @@
 #include <string.h>
 
 /*
+ * Preprocessor
+ */
+
+#define container_of(ptr, type, member)                         \
+	(type *)((char *)(ptr) - offsetof(type, member))
+
+#define memzero(x) memset(&(x), 0, sizeof(x))
+
+/*
  * Logging
  */
 
 #define log(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
 #define die(fmt, ...) do { log(fmt, ## __VA_ARGS__); exit(EXIT_FAILURE); } while (0)
-#define die_ret(fmt, ...) do { log(fmt, ## __VA_ARGS__); return 1; } while (0)
+#define die_ret(fmt, ...) do { log(fmt, ## __VA_ARGS__); return -1; } while (0)
+#define die_out(fmt, ...) do { log(fmt, ## __VA_ARGS__); goto out; } while (0)
 #define chk(expr, fmt, ...) do { if (!(expr)) die(fmt, ## __VA_ARGS__); } while (0)
 
 /*
@@ -101,7 +111,7 @@ long strtol_or_die(const char *arg)
 {
 	char *endptr = NULL;
 	errno = 0;
-	long val = strtol (arg, &endptr, 10);
+	long val = strtol(arg, &endptr, 10);
 
 	if (*arg == '\0' || *endptr != '\0') {
 		die("Argument is not a valid decimal number: '%s'", arg);
@@ -112,4 +122,32 @@ long strtol_or_die(const char *arg)
 	}
 
 	return val;
+}
+
+unsigned long strtoul_or_die(const char *arg)
+{
+	char *endptr = NULL;
+	errno = 0;
+	unsigned long val = strtoul(arg, &endptr, 10);
+
+	if (*arg == '\0' || *endptr != '\0') {
+		die("Argument is not a valid non-negative decimal number: '%s'", arg);
+	}
+
+	if (errno) {
+		die("Argument parse error: '%s': %m", arg);
+	}
+
+	return val;
+}
+
+void *malloc_or_die(size_t bytes)
+{
+	void *result = malloc(bytes);
+
+	if (!result) {
+		die("Failed to malloc() %zu bytes of memory: %m", bytes);
+	}
+
+	return result;
 }
