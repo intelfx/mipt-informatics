@@ -35,8 +35,3 @@ struct shared_memory {
 };
 
 #define DATA_MAX (sizeof(struct shared_memory) - 1)
-
-static const struct shared_memory shared_memory_init = {
-	.rcv_state = RCV_OK,
-	.snd_state = SND_NOT_DONE,
-};
