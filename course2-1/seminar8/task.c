@@ -2,9 +2,15 @@
 #include "../common_fileops.h"
 #include <sys/epoll.h>
 #include <time.h>
+#include <bsd/unistd.h>
+
+#ifdef DEBUG
+# define dbg(...) log(__VA_ARGS__)
+#else
+# define dbg(...) do { } while (0)
+#endif
 
 static const size_t BUF_MIN = 4*1024+1, BUF_MAX = 16*1024;
-
 static const uint32_t EPOLLFAKE = 0x80000000;
 
 size_t rand_buffer_size()
@@ -18,7 +24,7 @@ void kill_all_and_die(int code)
 
 	r = kill(0, SIGKILL);
 	if (r < 0) {
-		log("Failed to kill(0, SIGKILL): %m");
+		log("[parent] Failed to kill(0, SIGKILL): %m");
 	}
 
 	exit(code);
@@ -82,14 +88,14 @@ int child_main(size_t child_id, int fd_in, int fd_out)
 	}
 }
 
-int epoll_event_sort_descending(const void *arg_1, const void *arg_2)
+int epoll_event_sort_ascending(const void *arg_1, const void *arg_2)
 {
 	const struct epoll_event *e_1 = arg_1, *e_2 = arg_2;
 
 	if (e_2->data.ptr < e_1->data.ptr) {
-		return 1;
-	} else if (e_2->data.ptr > e_2->data.ptr) {
 		return -1;
+	} else if (e_2->data.ptr > e_2->data.ptr) {
+		return 1;
 	} else {
 		return 0;
 	}
@@ -111,7 +117,7 @@ int main(int argc, char **argv)
 	srand(time(NULL));
 
 	if (argc != 3) {
-		die("This program expects two arguments.");
+		die("[parent] This program expects two arguments.");
 	}
 
 	unsigned long child_nr = strtoul_or_die(argv[1]);
@@ -119,7 +125,7 @@ int main(int argc, char **argv)
 	const char *in_file = argv[2];
 	int in_fd = open(in_file, O_RDONLY);
 	if (in_fd < 0) {
-		die("Failed to open() input file \"%s\": %m", in_file);
+		die("[parent] Failed to open() input file \"%s\": %m", in_file);
 	}
 
 	struct sigaction sigchld = {
@@ -128,17 +134,17 @@ int main(int argc, char **argv)
 	};
 	r = sigaction(SIGCHLD, &sigchld, NULL);
 	if (r < 0) {
-		die("Failed to sigaction(SIGCHLD): %m");
+		die("[parent] Failed to sigaction(SIGCHLD): %m");
 	}
 
 	r = setpgid(0, 0);
 	if (r < 0) {
-		die("Failed to setpgid(0, 0) to create a new process group: %m");
+		die("[parent] Failed to setpgid(0, 0) to create a new process group: %m");
 	}
 
 	int epoll_fd = epoll_create1(0);
 	if (epoll_fd < 0) {
-		die("Failed to epoll_create1(): %m");
+		die("[parent] Failed to epoll_create1(): %m");
 	}
 
 	/* i-th buffer is to i-th child, (N+1)-th buffer is to output */
@@ -165,7 +171,7 @@ int main(int argc, char **argv)
 		b->begin = b->end = 0;
 		b->buf = (char *)malloc(b->buf_size);
 		if (b->buf == NULL) {
-			die("Failed to malloc() %zu bytes: %m", b->buf_size);
+			die("[parent] Failed to malloc() %zu bytes: %m", b->buf_size);
 		}
 
 		b->rd_event.events = EPOLLIN;
@@ -176,34 +182,28 @@ int main(int argc, char **argv)
 
 	log("[parent] buffers initialized");
 
-	/* initialize terminal connections (no polling on these) */
-	buffers[0].rd_fd = in_fd;
-	buffers[0].rd_event.events = EPOLLIN;
-	buffers[child_nr].wr_fd = STDOUT_FILENO;
-	buffers[child_nr].wr_event.events = EPOLLOUT;
-
 	/* create children and their pipes */
 	for (size_t i = 0; i < child_nr; ++i) {
 		int pipe_to_client[2], pipe_from_client[2];
 
 		r = pipe(pipe_to_client);
 		if (r < 0) {
-			die_out("Failed to pipe(): %m");
+			die_out("[parent] Failed to pipe(): %m");
 		}
 
 		r = pipe(pipe_from_client);
 		if (r < 0) {
-			die_out("Failed to pipe(): %m");
+			die_out("[parent] Failed to pipe(): %m");
 		}
 
 		r = fd_make_non_blocking(pipe_to_client[1]);
 		if (r < 0) {
-			die_out("Failed to switch a writing end to non-blocking mode: %m");
+			die_out("[parent] Failed to switch a writing end to non-blocking mode: %m");
 		}
 
 		r = fd_make_non_blocking(pipe_from_client[0]);
 		if (r < 0) {
-			die_out("Failed to switch a reading end to non-blocking mode: %m");
+			die_out("[parent] Failed to switch a reading end to non-blocking mode: %m");
 		}
 
 		buffers[i  ].wr_fd = pipe_to_client[1];
@@ -213,15 +213,29 @@ int main(int argc, char **argv)
 
 		pid_t child_pid = fork();
 		if (child_pid < 0) {
-			die_out("Failed to fork(): %m");
+			die_out("[parent] Failed to fork(): %m");
 		}
 		if (child_pid == 0) {
-			/* close fds from the parent */
-			for (size_t j = 0; j <= i + 1; ++j) {
-				close(buffers[j].wr_fd);
-				close(buffers[j].rd_fd);
+			/* reopen pipes as stdin/stdout and close all other fds */
+			close(STDIN_FILENO);
+			r = dup2(pipe_to_client[0], STDIN_FILENO);
+			if (r < 0) {
+				die("[child %zu] Failed to dup2() input pipe fd %d as stdin: %m",
+				    i,
+				    pipe_to_client[0]);
 			}
-			r = child_main(i, pipe_to_client[0], pipe_from_client[1]);
+
+			close(STDOUT_FILENO);
+			r = dup2(pipe_from_client[1], STDOUT_FILENO);
+			if (r < 0) {
+				die("[child %zu] Failed to dup2() output pipe fd %d as stdout: %m",
+				    i,
+				    pipe_from_client[1]);
+			}
+
+			closefrom(STDERR_FILENO + 1);
+
+			r = child_main(i, STDIN_FILENO, STDOUT_FILENO);
 			exit(r);
 		}
 
@@ -239,19 +253,25 @@ int main(int argc, char **argv)
 		if (i != 0) {
 			r = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, b->rd_fd, &b->rd_event);
 			if (r < 0) {
-				die_out("Failed to epoll_ctl(EPOLL_CTL_ADD): %m");
+				die_out("[parent] Failed to epoll_ctl(EPOLL_CTL_ADD): %m");
 			}
 		}
 
 		if (i != child_nr) {
 			r = epoll_ctl(epoll_fd, EPOLL_CTL_ADD, b->wr_fd, &b->wr_event);
 			if (r < 0) {
-				die_out("Failed to epoll_ctl(EPOLL_CTL_ADD): %m");
+				die_out("[parent] Failed to epoll_ctl(EPOLL_CTL_ADD): %m");
 			}
 		}
 	}
 
 	log("[parent] epoll initialized");
+
+	/* initialize terminal connections (no polling on these) */
+	buffers[0].rd_fd = in_fd;
+	buffers[0].rd_event.events = EPOLLIN;
+	buffers[child_nr].wr_fd = STDOUT_FILENO;
+	buffers[child_nr].wr_event.events = EPOLLOUT;
 
 	/*
 	 * Now the main loop.
@@ -262,7 +282,7 @@ int main(int argc, char **argv)
 	 * iteration of the loop. Finally, we'd like to scan events starting from the
 	 * tail.
 	 * Hence, because it's C and we have no STL, we sort the epoll events by connection
-	 * (actually, by user-data pointer value) in descending(!) order and then
+	 * (actually, by user-data pointer value) in ascending order and then
 	 * coalesce them into temporary per-connection structures.
 	 */
 
@@ -291,7 +311,7 @@ int main(int argc, char **argv)
 		}
 
 		size_t epoll_event_nr = r;
-		log("[parent] epoll_wait() returned %zu events", epoll_event_nr);
+		dbg("[parent] epoll_wait() returned %zu events", epoll_event_nr);
 		if (epoll_event_nr == 0) {
 			continue;
 		}
@@ -313,7 +333,7 @@ int main(int argc, char **argv)
 		}
 
 		/* sort the epoll events */
-		qsort(epoll_events, epoll_event_nr, sizeof(epoll_events[0]), &epoll_event_sort_descending);
+		qsort(epoll_events, epoll_event_nr, sizeof(epoll_events[0]), &epoll_event_sort_ascending);
 
 		/* coalesce the epoll events into "buffer events" */
 		struct buffer_event *be_last = buffer_events;
@@ -333,7 +353,7 @@ int main(int argc, char **argv)
 			                         ? container_of(ee_orig, struct buffer, wr_event)
 			                         : container_of(ee_orig, struct buffer, rd_event);
 
-			log("[parent] epoll_event %zu: buffer %zu fd %s events 0x%08x",
+			dbg("[parent] epoll_event %zu: buffer %zu fd %s events 0x%08x",
 			    i,
 			    ee_buffer - buffers,
 			    ee_is_wr ? "write" : "read",
@@ -351,7 +371,7 @@ int main(int argc, char **argv)
 				be_last->buffer = ee_buffer;
 			}
 
-			log("[parent] epoll_event %zu: -> buffer_event %zu",
+			dbg("[parent] epoll_event %zu: -> buffer_event %zu",
 			    i,
 			    be_last - buffer_events);
 
@@ -361,7 +381,7 @@ int main(int argc, char **argv)
 				be_last->wr_ready_out = consume_flag(&ee->events, EPOLLOUT);
 				be_last->wr_have_errors = consume_flag(&ee->events, EPOLLERR);
 				be_last->wr_non_pollable = consume_flag(&ee->events, EPOLLFAKE);
-				log("[parent] epoll_event %zu: wr_seen = 1, wr_ready_out = %d, wr_have_errors = %d",
+				dbg("[parent] epoll_event %zu: wr_seen = 1, wr_ready_out = %d, wr_have_errors = %d",
 				    i,
 				    be_last->wr_ready_out,
 				    be_last->wr_have_errors);
@@ -371,7 +391,7 @@ int main(int argc, char **argv)
 				be_last->rd_hang_up = consume_flag(&ee->events, EPOLLHUP);
 				be_last->rd_have_errors = consume_flag(&ee->events, EPOLLERR);
 				be_last->rd_non_pollable = consume_flag(&ee->events, EPOLLFAKE);
-				log("[parent] epoll_event %zu: rd_seen = 1, rd_ready_in = %d, rd_hang_up = %d, rd_have_errors = %d",
+				dbg("[parent] epoll_event %zu: rd_seen = 1, rd_ready_in = %d, rd_hang_up = %d, rd_have_errors = %d",
 				    i,
 				    be_last->rd_ready_in,
 				    be_last->rd_hang_up,
@@ -386,15 +406,15 @@ int main(int argc, char **argv)
 		}
 
 		size_t buffer_event_nr = be_last - buffer_events + 1;
-		log("[parent] coalesced into %zu events", buffer_event_nr);
+		dbg("[parent] coalesced into %zu events", buffer_event_nr);
 
-		/* now process coalesced events */
-		for (size_t i = 0; i < buffer_event_nr; ++i) {
+		/* process coalesced events for data, starting from tail */
+		for (ssize_t i = buffer_event_nr - 1; i >= 0; --i) {
 			struct buffer_event *be = buffer_events + i;
+			size_t buf_i = be->buffer - buffers;
 
 			/* write out buffer */
 			if ((be->buffer->begin != be->buffer->end) &&
-			    be->wr_seen &&
 			    (be->wr_non_pollable ||
 			     (be->wr_ready_out && !be->wr_have_errors))) {
 				/* write out */
@@ -402,8 +422,9 @@ int main(int argc, char **argv)
 				                         be->buffer->buf + be->buffer->begin,
 				                         be->buffer->end - be->buffer->begin);
 				if (wr_bytes < 0) {
-					die_out("Failed to write() %zu bytes: %m",
-					        be->buffer->end - be->buffer->begin);
+					log("[parent] Failed to write() %zu bytes: %m",
+					     be->buffer->end - be->buffer->begin);
+					be->wr_have_errors = true;
 				}
 
 				be->buffer->begin += wr_bytes;
@@ -411,7 +432,6 @@ int main(int argc, char **argv)
 
 			/* read in buffer */
 			if ((be->buffer->begin == be->buffer->end) &&
-			    be->rd_seen &&
 			    (be->rd_non_pollable ||
 			     (be->rd_ready_in && !be->rd_have_errors))) {
 				/* read in */
@@ -419,13 +439,13 @@ int main(int argc, char **argv)
 				                        be->buffer->buf,
 				                        be->buffer->buf_size);
 				if (rd_bytes < 0) {
-					die_out("Failed to read() %zu bytes: %m",
-					        be->buffer->buf_size);
+					log("[parent] Failed to read() %zu bytes: %m",
+					     be->buffer->buf_size);
+					be->rd_have_errors = true;
 				}
 				if (rd_bytes == 0) {
 					log("[parent] buffer_event %zu: buffer %zu input EOF",
-					    i,
-					    be->buffer - buffers);
+					    i, buf_i);
 					be->rd_ready_in = false;
 					be->rd_hang_up = true;
 				}
@@ -434,17 +454,26 @@ int main(int argc, char **argv)
 				be->buffer->end = rd_bytes;
 			}
 
+			if (be->rd_have_errors || be->wr_have_errors) {
+				die_out("[parent] I/O for buffer %zu has errors",
+				        buf_i);
+			}
+		}
+
+		/* process coalesced events for closing, starting from head */
+		for (size_t i = 0; i < buffer_event_nr; ++i) {
+			struct buffer_event *be = buffer_events + i;
+			size_t buf_i = be->buffer - buffers;
+
 			/* close input if we're done with it */
-			if (be->rd_seen &&
-			    !be->rd_ready_in && be->rd_hang_up) {
+			if (!be->rd_ready_in && be->rd_hang_up) {
 				log("[parent] buffer_event %zu: buffer %zu input hangup, closing",
-				    i,
-				    be->buffer - buffers);
+				    i, buf_i);
 
 				if (!be->rd_non_pollable) {
 					r = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, be->buffer->rd_fd, NULL);
 					if (r < 0) {
-						die_out("Failed to epoll_ctl(EPOLL_CTL_DEL) the exhausted input fd: %m");
+						die_out("[parent] Failed to epoll_ctl(EPOLL_CTL_DEL) the exhausted input fd: %m");
 					}
 				}
 
@@ -462,16 +491,25 @@ int main(int argc, char **argv)
 				if (!be->wr_non_pollable) {
 					r = epoll_ctl(epoll_fd, EPOLL_CTL_DEL, be->buffer->wr_fd, NULL);
 					if (r < 0) {
-						die_out("Failed to epoll_ctl(EPOLL_CTL_DEL) the exhausted output fd: %m");
+						die_out("[parent] Failed to epoll_ctl(EPOLL_CTL_DEL) the exhausted output fd: %m");
 					}
 				}
 
 				close(be->buffer->wr_fd);
 				be->buffer->wr_fd = -1;
 
-				/* if we have just closed stdout, exit */
+				/* if we have just closed the output, exit */
 				if (be->buffer == &buffers[child_nr]) {
-					log("[parent] Done");
+					log("[parent] Done, waiting for children");
+					for (;;) {
+						r = waitpid(0, NULL, 0);
+						if (r < 0) {
+							if (errno == ECHILD) {
+								break;
+							}
+							die_out("[parent] Failed to waitpid(0): %m");
+						}
+					}
 					return 0;
 				}
 			}
