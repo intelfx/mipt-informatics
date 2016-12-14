@@ -94,6 +94,27 @@ int fd_make_blocking(int fd)
 	return 0;
 }
 
+int fd_make_non_blocking(int fd)
+{
+	int r;
+
+	r = fcntl(fd, F_GETFL);
+	if (r < 0) {
+		log("Failed to fcntl(F_GETFL) fd %d: %m", fd);
+		return -1;
+	}
+
+	if (!(r & O_NONBLOCK)) {
+		r = fcntl(fd, F_SETFL, r | O_NONBLOCK);
+		if (r < 0) {
+			log("Failed to fcntl(F_SETFL) fd %d to make nonblocking: %m", fd);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
 enum cat_fd_result
 {
 	RESULT_OK,
